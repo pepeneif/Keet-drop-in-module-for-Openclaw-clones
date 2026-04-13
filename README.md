@@ -9,7 +9,7 @@
 | Feature | Description |
 |--------|-------------|
 | **Creates a single installer script** (`install_keet_dropin.sh`) | Detects the running agent, installs Node v20 (once), pulls the required NPM packages, creates the three Keet skills (`keet‑create‑room`, `keet‑join‑room`, `keet‑send‑message`) and registers the appropriate channel plug‑ins. |
-| **`keet‑create‑room`** now accepts an optional **room name**. If you omit the name a UUID is generated and used as the name (so the script always receives a valid argument). The command returns a JSON with `roomId`, `inviteUrl`, `sessionId` **and** `roomName`. |
+| **`keet‑create‑room`** | It accepts an optional **room name**. If you omit the name a UUID is generated and used as the name (so the script always receives a valid argument). The command returns a JSON with `roomId`, `inviteUrl`, `sessionId` **and** `roomName`. |
 | **Persistent history** | A permanent folder `~/.nanobot/rooms/` is created. Each room’s history is stored in a file `<roomId>_<sessionId>.dat` using `random‑access‑file`. The history survives agent restarts and is automatically loaded when you re‑join the same `<roomId>` + `<sessionId>`. |
 | **Supports every OpenClaw‑derived platform** | <ul><li>**Nanobot** – skills live in `skills/` and are auto‑discovered.</li><li>**CoPaw / QwenPaw** – a Python `custom_channels/keet_channel.py` subclass of `BaseChannel` is generated and registered with `copaw channels add keet`.</li><li>**Hermes‑agent** – a Python plug‑in `~/.hermes/plugins/keet_plugin.py` exposing `keet_create`, `keet_join`, `keet_send`.</li><li>**OpenClaw** – a TypeScript channel plug‑in (`src/plugins/keet-channel/keet-channel.ts`) built on the SDK’s `createChatChannelPlugin` function, automatically loaded by the OpenClaw catalog.</li></ul> |
 | **Zero manual configuration** | All files are written to the agent’s workspace, permissions (`chmod +x`) are set, and the appropriate registration commands are run automatically. After the one‑liner the agent is ready to use Keet. |
@@ -64,9 +64,9 @@ nanobot agent -m "keet-create-room"
 
 ```json
 {
-  "roomId":"nfothw7g5tip9s7x9kiws9yox1xyg3icu5cwthnqsrjn4y5xkpa5yfkkfigce6ox1gtkoy69yn8npriq4jj661y6z4hex38fx5894whoeuuj8k65kfwgwtm7cg7ooxm8qwxtrxtra7yzgee5zazfzym6e8iphyed4ruqojnkambti6c7hqtawtrubbmew",
-  "inviteUrl":"pear://keet/nfothw7g5tip9s7x9kiws9yox1xyg3icu5cwthnqsrjn4y5xkpa5yfkkfigce6ox1gtkoy69yn8npriq4jj661y6z4hex38fx5894whoeuuj8k65kfwgwtm7cg7ooxm8qwxtrxtra7yzgee5zazfzym6e8iphyed4ruqojnkambti6c7hqtawtrubbmew",
-  "sessionId":"d9b7c8e1-2f73-4b12-a5b1-c3f8e9a6b4d2",
+  "roomId":"nfothw1g5tip9s7x9kiws9yox1xyg3icu5cwthnqsrjn4y5xkpa5yfkkfigce6ox1gtkoy69yn8npriq4jj661y6z4hex38fx5894whoeuuj8k65kfwgwtm7cg7ooxm8qwxtrxtra7yzgee5zazfzym6e8iphyed4ruqojnkambti6c7hqtawtrubbmew",
+  "inviteUrl":"pear://keet/nfothw1g5tip9s7x9kiws9yox1xyg3icu5cwthnqsrjn4y5xkpa5yfkkfigce6ox1gtkoy69yn8npriq4jj661y6z4hex38fx5894whoeuuj8k65kfwgwtm7cg7ooxm8qwxtrxtra7yzgee5zazfzym6e8iphyed4ruqojnkambti6c7hqtawtrubbmew",
+  "sessionId":"d9b7c4e1-2f73-4b12-a5b1-c3f8e9a6b4d2",
   "roomName":"MyAwesomeRoom"
 }
 ```
