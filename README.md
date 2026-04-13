@@ -35,7 +35,7 @@ This version installs a **shared always-on Keet core** and now prioritizes **Her
 Recommended run (explicit Hermes target):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh) --target hermes
+bash <(curl -fsSL https://raw.githubusercontent.com/pepeneif/Keet-drop-in-module-for-Openclaw-clones/main/install_keet_dropin.sh) --target hermes
 ```
 
 The installer script [`install_keet_dropin.sh`](install_keet_dropin.sh) does the following:
@@ -80,7 +80,7 @@ bash install_keet_dropin.sh --target openclaw
 bash install_keet_dropin.sh --target auto
 
 # Piped install (non-interactive): target is required
-curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh | bash -s -- --target hermes
+curl -fsSL https://raw.githubusercontent.com/pepeneif/Keet-drop-in-module-for-Openclaw-clones/main/install_keet_dropin.sh | bash -s -- --target hermes
 ```
 
 ### Hermes plugin output (current)
@@ -259,7 +259,7 @@ This ensures Keet behaves like a real long-lived channel integration rather than
 ## 9) Repository layout
 
 ```text
-keet-dropin-module/
+Keet-drop-in-module-for-Openclaw-clones/
 ├─ install_keet_dropin.sh
 ├─ run.sh
 ├─ package.json
