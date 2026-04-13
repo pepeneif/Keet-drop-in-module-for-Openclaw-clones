@@ -2,8 +2,9 @@
 # =============================================================================
 # install_keet_dropin.sh
 # =============================================================================
-#   - Detects Nanobot, CoPaw/QwenPaw, Hermes-agent, or OpenClaw.
-#   - Installs Node v20 inside the detected workspace (if missing).
+#   - Installs into an explicitly selected target: Hermes-agent, Nanobot,
+#     CoPaw/QwenPaw, OpenClaw (or explicit auto-detect mode).
+#   - Installs Node v20 inside the selected workspace (if missing).
 #   - Installs required npm dependencies.
 #   - Creates a shared always-on Keet core (daemon + RPC + event stream).
 #   - Generates equivalent skills/adapters for Nanobot, CoPaw, Hermes, OpenClaw.
@@ -22,6 +23,131 @@ NODE_VERSION="20.12.0"
 log()   { printf "\e[32m[✔]\e[0m %s\n" "$*"; }
 warn()  { printf "\e[33m[!]\e[0m %s\n" "$*"; }
 error() { printf "\e[31m[✖]\e[0m %s\n" "$*" >&2; exit 1; }
+
+print_help() {
+  cat <<'EOF'
+Keet Drop-in installer
+
+Usage:
+  bash install_keet_dropin.sh [--target <hermes|nanobot|copaw|openclaw|auto>] [--help]
+
+Targets:
+  hermes    Install for Hermes-agent (recommended/default in interactive mode)
+  nanobot   Install for NanoBot
+  copaw     Install for CoPaw / QwenPaw
+  openclaw  Install for OpenClaw workspace (run from OpenClaw repo root)
+  auto      Auto-detect exactly one installed runtime (fails if multiple are found)
+
+Examples:
+  # Interactive install (defaults to Hermes)
+  bash install_keet_dropin.sh
+
+  # Non-interactive install for Hermes
+  bash install_keet_dropin.sh --target hermes
+
+  # Remote install with explicit target
+  bash <(curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh) --target hermes
+
+  # Piped install with explicit target
+  curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh | bash -s -- --target hermes
+EOF
+}
+
+normalize_target() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+TARGET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target)
+      [[ $# -ge 2 ]] || error "Missing value for --target. Use --help for examples."
+      TARGET=$(normalize_target "$2")
+      shift 2
+      ;;
+    --target=*)
+      TARGET=$(normalize_target "${1#*=}")
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    *)
+      error "Unknown argument: $1. Use --help for supported options."
+      ;;
+  esac
+done
+
+is_supported_target() {
+  case "$1" in
+    hermes|nanobot|copaw|openclaw|auto) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+select_target_interactive() {
+  echo ""
+  echo "Select OpenClaw-family target for Keet installation:"
+  echo "  1) Hermes-agent (default, recommended)"
+  echo "  2) NanoBot"
+  echo "  3) CoPaw / QwenPaw"
+  echo "  4) OpenClaw"
+  echo "  5) Auto-detect (explicit)"
+  read -r -p "Choose target [1]: " choice
+
+  case "${choice:-1}" in
+    1) TARGET="hermes" ;;
+    2) TARGET="nanobot" ;;
+    3) TARGET="copaw" ;;
+    4) TARGET="openclaw" ;;
+    5) TARGET="auto" ;;
+    *) error "Invalid choice: ${choice}." ;;
+  esac
+}
+
+detect_agent_auto() {
+  local detected=()
+
+  if command -v hermes-agent >/dev/null 2>&1 || command -v hermes >/dev/null 2>&1; then
+    detected+=("hermes")
+  fi
+  command -v nanobot >/dev/null 2>&1 && detected+=("nanobot")
+  command -v copaw >/dev/null 2>&1 && detected+=("copaw")
+  [[ -d "$(pwd)/src" && -f "$(pwd)/package.json" ]] && detected+=("openclaw")
+
+  if (( ${#detected[@]} == 0 )); then
+    error "Auto-detect found no supported target. Re-run with --target <hermes|nanobot|copaw|openclaw>."
+  fi
+
+  if (( ${#detected[@]} > 1 )); then
+    error "Auto-detect is ambiguous (found: ${detected[*]}). Re-run with explicit --target <hermes|nanobot|copaw|openclaw>."
+  fi
+
+  printf '%s' "${detected[0]}"
+}
+
+validate_target_prereqs() {
+  case "$1" in
+    hermes)
+      if ! command -v hermes-agent >/dev/null 2>&1 && ! command -v hermes >/dev/null 2>&1; then
+        error "--target hermes requested but neither 'hermes-agent' nor 'hermes' was found in PATH."
+      fi
+      ;;
+    nanobot)
+      command -v nanobot >/dev/null 2>&1 || error "--target nanobot requested but 'nanobot' was not found in PATH."
+      ;;
+    copaw)
+      command -v copaw >/dev/null 2>&1 || error "--target copaw requested but 'copaw' was not found in PATH."
+      ;;
+    openclaw)
+      [[ -d "$(pwd)/src" && -f "$(pwd)/package.json" ]] || error "--target openclaw requires running from the OpenClaw workspace root (must contain ./src and ./package.json)."
+      ;;
+    *)
+      error "Unsupported target: $1"
+      ;;
+  esac
+}
 
 # -------------------------------------------------------------------------
 # Detect OS and architecture for Node download
@@ -47,47 +173,65 @@ detect_platform() {
 }
 
 # -------------------------------------------------------------------------
-# 1️⃣ Detect which OpenClaw-family agent is running
+# 1️⃣ Resolve install target (explicit selection first)
 # -------------------------------------------------------------------------
-AGENT_TYPE="unknown"
-if command -v nanobot >/dev/null 2>&1; then AGENT_TYPE="nanobot"; fi
-if command -v copaw >/dev/null 2>&1; then AGENT_TYPE="copaw"; fi
-if command -v hermes-agent >/dev/null 2>&1; then AGENT_TYPE="hermes"; fi
-if [[ -d "$(pwd)/src" && -f "$(pwd)/package.json" ]]; then AGENT_TYPE="openclaw"; fi
-
-if [[ "$AGENT_TYPE" == "unknown" ]]; then
-  error "No agent binary found (nanobot / copaw / hermes-agent) nor OpenClaw workspace. Aborting."
+if [[ -z "$TARGET" ]]; then
+  if [[ -t 0 ]]; then
+    select_target_interactive
+  else
+    error "Non-interactive mode requires --target <hermes|nanobot|copaw|openclaw|auto>."
+  fi
 fi
-log "Agent detected: $AGENT_TYPE"
+
+is_supported_target "$TARGET" || error "Unsupported target '$TARGET'. Use --help for supported values."
+
+if [[ "$TARGET" == "auto" ]]; then
+  AGENT_TYPE="$(detect_agent_auto)"
+  log "Target auto-detected: $AGENT_TYPE"
+else
+  AGENT_TYPE="$TARGET"
+  log "Target selected: $AGENT_TYPE"
+fi
+
+validate_target_prereqs "$AGENT_TYPE"
 
 # -------------------------------------------------------------------------
-# 2️⃣ Define workspace paths based on the detected agent
+# 2️⃣ Define workspace paths based on selected target
 # -------------------------------------------------------------------------
+PLUGIN_ROOT=""
+CHANNEL_ROOT=""
 case "$AGENT_TYPE" in
   nanobot)
     WORKSPACE="${HOME}/.nanobot/workspace"
     SKILLS_ROOT="${WORKSPACE}/skills"
+    ROOMS_DIR="${HOME}/.nanobot/rooms"
     ;;
   copaw)
     WORKSPACE="${HOME}/.copaw"
     SKILLS_ROOT="${WORKSPACE}/skills"
     CHANNEL_ROOT="${WORKSPACE}/custom_channels"
+    ROOMS_DIR="${HOME}/.copaw/rooms"
     ;;
   hermes)
     WORKSPACE="${HOME}/.hermes"
     SKILLS_ROOT="${WORKSPACE}/skills"
     PLUGIN_ROOT="${WORKSPACE}/plugins"
+    ROOMS_DIR="${HOME}/.hermes/rooms"
     ;;
   openclaw)
     WORKSPACE="$(pwd)"
     SKILLS_ROOT="${WORKSPACE}/skills"
     PLUGIN_ROOT="${WORKSPACE}/src/plugins/keet-channel"
+    ROOMS_DIR="${HOME}/.openclaw/rooms"
     ;;
 esac
 
 mkdir -p "$WORKSPACE"
 mkdir -p "$SKILLS_ROOT"
+mkdir -p "$ROOMS_DIR"
+mkdir -p "${ROOMS_DIR}/sessions"
 log "Workspace -> $WORKSPACE"
+log "Persistent rooms folder -> $ROOMS_DIR"
 
 # -------------------------------------------------------------------------
 # 3️⃣ Ensure Node v20 is present (download it if necessary)
@@ -128,16 +272,10 @@ log "Installing required npm dependencies..."
 log "Dependencies installed"
 
 # -------------------------------------------------------------------------
-# 5️⃣ Always create persistent folders under ~/.nanobot/rooms
+# 5️⃣ Generate shared Keet core + skills (common to all agents)
 # -------------------------------------------------------------------------
-ROOMS_DIR="${HOME}/.nanobot/rooms"
-mkdir -p "$ROOMS_DIR"
-mkdir -p "${ROOMS_DIR}/sessions"
-log "Persistent rooms folder -> $ROOMS_DIR"
+ROOMS_DIR_JS="${ROOMS_DIR//\'/\\\'}"
 
-# -------------------------------------------------------------------------
-# 6️⃣ Generate shared Keet core + skills (common to all agents)
-# -------------------------------------------------------------------------
 mkdir -p "${SKILLS_ROOT}/keet-core"
 mkdir -p "${SKILLS_ROOT}/keet-create-room"
 mkdir -p "${SKILLS_ROOT}/keet-join-room"
@@ -146,7 +284,7 @@ mkdir -p "${SKILLS_ROOT}/keet-leave-room"
 mkdir -p "${SKILLS_ROOT}/keet-list-sessions"
 
 # ---- keet-core / daemon.js ---------------------------------------------
-cat > "${SKILLS_ROOT}/keet-core/daemon.js" <<'EOF'
+cat > "${SKILLS_ROOT}/keet-core/daemon.js" <<EOF
 #!/usr/bin/env node
 
 const fs = require('fs')
@@ -159,7 +297,7 @@ const RAF = require('random-access-file')
 const { createInvite } = require('blind-pairing-core')
 const { encode, decode } = require('hypercore-id-encoding')
 
-const BASE_DIR = path.join(os.homedir(), '.nanobot', 'rooms')
+const BASE_DIR = '${ROOMS_DIR_JS}'
 const SOCKET_PATH = path.join(BASE_DIR, 'keet-core.sock')
 const PID_PATH = path.join(BASE_DIR, 'keet-core.pid')
 const STATE_PATH = path.join(BASE_DIR, 'keet-state.json')
@@ -502,7 +640,7 @@ EOF
 chmod +x "${SKILLS_ROOT}/keet-core/daemon.js"
 
 # ---- keet-core / ensure_daemon.js --------------------------------------
-cat > "${SKILLS_ROOT}/keet-core/ensure_daemon.js" <<'EOF'
+cat > "${SKILLS_ROOT}/keet-core/ensure_daemon.js" <<EOF
 #!/usr/bin/env node
 
 const fs = require('fs')
@@ -511,7 +649,7 @@ const path = require('path')
 const net = require('net')
 const { spawn } = require('child_process')
 
-const BASE_DIR = path.join(os.homedir(), '.nanobot', 'rooms')
+const BASE_DIR = '${ROOMS_DIR_JS}'
 const SOCKET_PATH = path.join(BASE_DIR, 'keet-core.sock')
 const PID_PATH = path.join(BASE_DIR, 'keet-core.pid')
 const DAEMON_PATH = path.join(__dirname, 'daemon.js')
@@ -932,7 +1070,7 @@ chmod +x "${SKILLS_ROOT}/keet-list-sessions/list_sessions.js"
 log "Skill keet-list-sessions generated"
 
 # -------------------------------------------------------------------------
-# 7️⃣ Create platform adapters (equivalent command surface)
+# 6️⃣ Create platform adapters (equivalent command surface)
 # -------------------------------------------------------------------------
 
 # ---- CoPaw (custom_channels) --------------------------------------------
@@ -1009,7 +1147,189 @@ fi
 # ---- Hermes-agent --------------------------------------------------------
 if [[ "$AGENT_TYPE" == "hermes" ]]; then
   mkdir -p "${PLUGIN_ROOT}"
+  HERMES_PLUGIN_DIR="${PLUGIN_ROOT}/keet-dropin"
+  mkdir -p "${HERMES_PLUGIN_DIR}"
 
+  cat > "${HERMES_PLUGIN_DIR}/plugin.yaml" <<'EOF'
+name: keet-dropin
+version: "0.1"
+description: Keet bridge plugin for Hermes-agent using the shared Node keet-core.
+EOF
+
+  cat > "${HERMES_PLUGIN_DIR}/__init__.py" <<EOF
+"""Hermes plugin: Keet drop-in tools backed by the shared Node keet-core."""
+
+import json
+import os
+import subprocess
+from typing import Any, Dict, List, Optional
+
+NODE_BIN = "${NODE_BIN}"
+SKILLS_ROOT = "${SKILLS_ROOT}"
+
+
+def _run(script_rel: str, *args: str) -> str:
+    cmd = [NODE_BIN, os.path.join(SKILLS_ROOT, script_rel), *args]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def _schema(name: str, description: str, properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": properties,
+            "required": required or [],
+        },
+    }
+
+
+def _tool_create(params: Dict[str, Any]) -> Dict[str, Any]:
+    room_name = str(params.get("room_name", "")).strip()
+    args = [room_name] if room_name else []
+    out = _run("keet-create-room/create_room.js", *args)
+    return json.loads(out)
+
+
+def _tool_join(params: Dict[str, Any]) -> Dict[str, Any]:
+    url = str(params.get("url", "")).strip()
+    if not url:
+        raise ValueError("url is required")
+
+    args = [url]
+    session_id = str(params.get("session_id", "")).strip()
+    if session_id:
+        args += ["--session", session_id]
+
+    # Non-blocking by default for tool usage in Hermes.
+    args += ["--no-watch", "--no-stdin"]
+
+    out = _run("keet-join-room/join_room.js", *args)
+    return {"status": "joined", "detail": out}
+
+
+def _tool_send(params: Dict[str, Any]) -> Dict[str, Any]:
+    url = str(params.get("url", "")).strip()
+    message = str(params.get("message", "")).strip()
+    if not url:
+        raise ValueError("url is required")
+    if not message:
+        raise ValueError("message is required")
+
+    args = [url, message]
+    session_id = str(params.get("session_id", "")).strip()
+    if session_id:
+        args += ["--session", session_id]
+
+    out = _run("keet-send-message/send_message.js", *args)
+    return {"status": "sent", "detail": out}
+
+
+def _tool_leave(params: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(params.get("session_id", "")).strip()
+    if not session_id:
+        raise ValueError("session_id is required")
+    out = _run("keet-leave-room/leave_room.js", session_id)
+    return json.loads(out)
+
+
+def _tool_sessions(_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = _run("keet-list-sessions/list_sessions.js")
+    return json.loads(out)
+
+
+def register(ctx):
+    ctx.register_tool(
+        "keet_create_room",
+        _schema(
+            "keet_create_room",
+            "Create a Keet room and return room metadata.",
+            {
+                "room_name": {
+                    "type": "string",
+                    "description": "Optional room label.",
+                }
+            },
+            [],
+        ),
+        _tool_create,
+    )
+
+    ctx.register_tool(
+        "keet_join_room",
+        _schema(
+            "keet_join_room",
+            "Join a Keet room and keep a persistent session in the shared daemon.",
+            {
+                "url": {
+                    "type": "string",
+                    "description": "Keet invite URL (pear://keet/<room-id>).",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional stable session id.",
+                },
+            },
+            ["url"],
+        ),
+        _tool_join,
+    )
+
+    ctx.register_tool(
+        "keet_send_message",
+        _schema(
+            "keet_send_message",
+            "Send a message through Keet using url/message and optional session id.",
+            {
+                "url": {
+                    "type": "string",
+                    "description": "Keet invite URL (pear://keet/<room-id>).",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message to send.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional stable session id.",
+                },
+            },
+            ["url", "message"],
+        ),
+        _tool_send,
+    )
+
+    ctx.register_tool(
+        "keet_leave_room",
+        _schema(
+            "keet_leave_room",
+            "Leave an active Keet session.",
+            {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session identifier to stop.",
+                }
+            },
+            ["session_id"],
+        ),
+        _tool_leave,
+    )
+
+    ctx.register_tool(
+        "keet_list_sessions",
+        _schema(
+            "keet_list_sessions",
+            "List active Keet sessions managed by the shared daemon.",
+            {},
+            [],
+        ),
+        _tool_sessions,
+    )
+EOF
+
+  # Backward-compatible helper module for previous installer outputs.
   cat > "${PLUGIN_ROOT}/keet_plugin.py" <<EOF
 """
 Hermes-agent plugin for Keet always-on core.
@@ -1072,7 +1392,8 @@ def keet_sessions() -> list:
     return json.loads(out)
 EOF
 
-  log "Hermes plugin written -> ${PLUGIN_ROOT}/keet_plugin.py"
+  log "Hermes plugin written -> ${HERMES_PLUGIN_DIR}/"
+  log "Hermes legacy helper retained -> ${PLUGIN_ROOT}/keet_plugin.py"
 fi
 
 # ---- OpenClaw ------------------------------------------------------------
@@ -1213,16 +1534,21 @@ EOF
 fi
 
 # -------------------------------------------------------------------------
-# 8️⃣ Print usage guide
+# 7️⃣ Print usage guide
 # -------------------------------------------------------------------------
 echo ""
 echo "============================================================================="
 echo "              Keet Drop-in Installation Complete (Always-on Core)"
 echo "============================================================================="
 echo ""
-echo "Agent detected: $AGENT_TYPE"
+echo "Target installed: $AGENT_TYPE"
 echo "Workspace: $WORKSPACE"
 echo "Node binary: $NODE_BIN"
+echo "Rooms directory: $ROOMS_DIR"
+if [[ "$AGENT_TYPE" == "hermes" ]]; then
+  echo "Hermes plugin: ${PLUGIN_ROOT}/keet_plugin.py"
+  echo "Hermes plugin dir: ${PLUGIN_ROOT}/keet-dropin"
+fi
 echo ""
 echo "Generated shared core:"
 echo "  - keet-core/daemon.js         (persistent room presence + event stream)"
@@ -1247,6 +1573,19 @@ echo "  $NODE_BIN ${SKILLS_ROOT}/keet-send-message/send_message.js pear://keet/<
 echo ""
 echo "  # Leave the session"
 echo "  $NODE_BIN ${SKILLS_ROOT}/keet-leave-room/leave_room.js <session-id>"
+echo ""
+if [[ "$AGENT_TYPE" == "hermes" ]]; then
+  echo "Hermes-focused operational notes:"
+  echo "  - Hermes plugins are loaded from ~/.hermes/plugins/<plugin-dir>/ with plugin.yaml + __init__.py."
+  echo "  - This installer creates ~/.hermes/plugins/keet-dropin/ and keeps keet_plugin.py as legacy helper."
+  echo "  - This installer uses Node deps: blind-pairing-core, hypercore-id-encoding,"
+  echo "    hypercore, random-access-file (not an official 'keet' npm package)."
+  echo "  - If dependencies are missing or broken, reinstall with:"
+  echo "    $NPM_BIN install blind-pairing-core hypercore-id-encoding hypercore random-access-file"
+  echo "  - After install, verify plugin discovery with: hermes plugins list"
+  echo "  - If Hermes auto-repair rewrites plugin state, restore this directory:"
+  echo "    ${PLUGIN_ROOT:-<not-applicable>}/keet-dropin"
+fi
 echo ""
 echo "Persistent storage: $ROOMS_DIR"
 echo "============================================================================="
