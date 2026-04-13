@@ -29,7 +29,7 @@ print_help() {
 Keet Drop-in installer
 
 Usage:
-  bash install_keet_dropin.sh [--target <hermes|nanobot|copaw|openclaw|auto>] [--help]
+  bash install_keet_dropin.sh [--target <hermes|nanobot|copaw|openclaw|auto>] [--reset-state] [--help]
 
 Targets:
   hermes    Install for Hermes-agent (recommended/default in interactive mode)
@@ -59,6 +59,9 @@ Examples:
 
   # Piped install with explicit target
   curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh | bash -s -- --target hermes
+
+  # Recovery install for Hermes (backs up + resets persisted Keet state)
+  bash install_keet_dropin.sh --target hermes --reset-state
 EOF
 }
 
@@ -67,6 +70,8 @@ normalize_target() {
 }
 
 TARGET=""
+RESET_STATE="false"
+RESET_BACKUP_SUFFIX=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
@@ -76,6 +81,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target=*)
       TARGET=$(normalize_target "${1#*=}")
+      shift
+      ;;
+    --reset-state)
+      RESET_STATE="true"
       shift
       ;;
     -h|--help)
@@ -177,6 +186,67 @@ validate_target_capabilities() {
   esac
 }
 
+stop_existing_keet_daemon() {
+  local daemon_path="${SKILLS_ROOT}/keet-core/daemon.js"
+  local socket_path="${ROOMS_DIR}/keet-core.sock"
+  local pid_path="${ROOMS_DIR}/keet-core.pid"
+  local stopped=0
+
+  if command -v pkill >/dev/null 2>&1; then
+    if pkill -f "$daemon_path" >/dev/null 2>&1; then
+      stopped=1
+    fi
+  fi
+
+  if [[ -f "$pid_path" ]]; then
+    local pid
+    pid=$(tr -d '[:space:]' < "$pid_path" || true)
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      if ps -p "$pid" -o command= | grep -F -- "$daemon_path" >/dev/null 2>&1; then
+        kill "$pid" >/dev/null 2>&1 || true
+        stopped=1
+      else
+        warn "Ignoring stale PID file: pid $pid does not match Keet daemon command"
+      fi
+    fi
+  fi
+
+  rm -f "$socket_path" "$pid_path"
+
+  if (( stopped == 1 )); then
+    log "Stopped existing Keet daemon process"
+  fi
+  log "Cleared stale Keet IPC files (socket/pid) in $ROOMS_DIR"
+}
+
+reset_persisted_keet_state() {
+  local ts key_path state_path backed_up=0
+  ts=$(date +%Y%m%d-%H%M%S)
+  key_path="${ROOMS_DIR}/keet-key-material.json"
+  state_path="${ROOMS_DIR}/keet-state.json"
+
+  if [[ -f "$key_path" ]]; then
+    cp "$key_path" "${key_path}.bak.${ts}"
+    backed_up=1
+  fi
+
+  if [[ -f "$state_path" ]]; then
+    cp "$state_path" "${state_path}.bak.${ts}"
+    backed_up=1
+  fi
+
+  rm -f "$key_path" "$state_path"
+  RESET_BACKUP_SUFFIX="$ts"
+
+  if (( backed_up == 1 )); then
+    log "Backed up persisted Keet state to *.bak.${ts}"
+  else
+    warn "No persisted Keet state files found to back up"
+  fi
+
+  log "Reset persisted Keet state via --reset-state"
+}
+
 # -------------------------------------------------------------------------
 # Detect OS and architecture for Node download
 # -------------------------------------------------------------------------
@@ -262,6 +332,14 @@ mkdir -p "$ROOMS_DIR"
 mkdir -p "${ROOMS_DIR}/sessions"
 log "Workspace -> $WORKSPACE"
 log "Persistent rooms folder -> $ROOMS_DIR"
+
+# Pre-install daemon hygiene (default for all targets)
+stop_existing_keet_daemon
+
+# Optional persisted-state reset (backup + purge)
+if [[ "$RESET_STATE" == "true" ]]; then
+  reset_persisted_keet_state
+fi
 
 # -------------------------------------------------------------------------
 # 3️⃣ Ensure Node v20 is present (download it if necessary)
@@ -1752,6 +1830,10 @@ echo "Target installed: $AGENT_TYPE"
 echo "Workspace: $WORKSPACE"
 echo "Node binary: $NODE_BIN"
 echo "Rooms directory: $ROOMS_DIR"
+echo "Reset persisted state: $RESET_STATE"
+if [[ "$RESET_STATE" == "true" ]]; then
+  echo "State backup suffix: ${RESET_BACKUP_SUFFIX}"
+fi
 if [[ "$AGENT_TYPE" == "hermes" ]]; then
   echo "Hermes plugin: ${PLUGIN_ROOT}/keet_plugin.py"
   echo "Hermes plugin dir: ${PLUGIN_ROOT}/keet-dropin"

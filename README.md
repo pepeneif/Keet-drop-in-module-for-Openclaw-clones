@@ -38,6 +38,12 @@ Recommended run (explicit Hermes target):
 bash <(curl -fsSL https://raw.githubusercontent.com/pepeneif/Keet-drop-in-module-for-Openclaw-clones/main/install_keet_dropin.sh) --target hermes
 ```
 
+Recovery run (Hermes state reset + backup):
+
+```bash
+bash install_keet_dropin.sh --target hermes --reset-state
+```
+
 The installer script [`install_keet_dropin.sh`](install_keet_dropin.sh) does the following:
 
 1. Resolves target explicitly (`--target hermes|nanobot|copaw|openclaw|auto`) or interactive menu (default: Hermes).
@@ -45,23 +51,25 @@ The installer script [`install_keet_dropin.sh`](install_keet_dropin.sh) does the
 3. Fails fast in non-interactive mode if `--target` is missing.
 4. Installs Node `v20.12.0` inside the selected workspace (if absent).
 5. Installs npm deps: `blind-pairing-core`, `hypercore-id-encoding`, `hypercore`, `random-access-file`, `z32`.
-6. Creates persistent storage in the selected runtime path (Hermes: `~/.hermes/rooms/` + `~/.hermes/rooms/sessions/`).
-7. Persists key material in `keet-key-material.json` (mode `0600`) containing:
+6. Performs pre-install daemon hygiene: stops stale Keet daemon and clears stale IPC files (`keet-core.sock`, `keet-core.pid`).
+7. Creates persistent storage in the selected runtime path (Hermes: `~/.hermes/rooms/` + `~/.hermes/rooms/sessions/`).
+8. Supports optional `--reset-state` to back up and purge persisted state files (`keet-key-material.json`, `keet-state.json`) before regeneration.
+9. Persists key material in `keet-key-material.json` (mode `0600`) containing:
    - stable `agentIdentity.secretKey`
    - per-room `roomOwnership.<roomId>.ownerKey`
    - timestamps + schema version for forward migrations
-8. Loads key material at daemon startup; if missing/corrupt, regenerates a valid structure and rewrites it atomically.
-6. Generates shared Keet core files:
+10. Loads key material at daemon startup; if missing/corrupt, regenerates a valid structure and rewrites it atomically.
+11. Generates shared Keet core files:
    - `skills/keet-core/daemon.js`
    - `skills/keet-core/ensure_daemon.js`
    - `skills/keet-core/client.js`
-9. Generates common skills:
+12. Generates common skills:
    - `keet-create-room`
    - `keet-join-room`
    - `keet-send-message`
    - `keet-leave-room`
    - `keet-list-sessions`
-10. Generates runtime adapter for CoPaw / Hermes / OpenClaw when relevant.
+13. Generates runtime adapter for CoPaw / Hermes / OpenClaw when relevant.
 
 ### Target-selection examples
 
@@ -71,6 +79,9 @@ bash install_keet_dropin.sh
 
 # Explicit non-interactive Hermes install
 bash install_keet_dropin.sh --target hermes
+
+# Explicit Hermes recovery install (state backup + reset)
+bash install_keet_dropin.sh --target hermes --reset-state
 
 # Explicit non-interactive NanoBot install
 bash install_keet_dropin.sh --target nanobot
@@ -233,6 +244,27 @@ Checklist:
    - `hermes plugins list`
 5. If dependencies are damaged, reinstall them in Hermes workspace:
    - `~/.hermes/node-v20.12.0-<platform>/bin/npm install blind-pairing-core hypercore-id-encoding hypercore random-access-file z32`
+6. Validate canonical room creation output:
+   - `~/.hermes/node-v20.12.0-<platform>/bin/node ~/.hermes/skills/keet-create-room/create_room.js 'Hermes'`
+   - expected: JSON including `roomId`, `inviteUrl` (`pear://keet/...`), `sessionId`, `roomName`
+
+If `create_room.js` fails with key-length errors or hangs because of stale runtime state, run this safe reset bundle:
+
+```bash
+set -euo pipefail
+
+pkill -f "$HOME/.hermes/skills/keet-core/daemon.js" 2>/dev/null || true
+rm -f "$HOME/.hermes/rooms/keet-core.sock" "$HOME/.hermes/rooms/keet-core.pid"
+
+TS=$(date +%Y%m%d-%H%M%S)
+[ -f "$HOME/.hermes/rooms/keet-key-material.json" ] && cp "$HOME/.hermes/rooms/keet-key-material.json" "$HOME/.hermes/rooms/keet-key-material.json.bak.$TS" || true
+[ -f "$HOME/.hermes/rooms/keet-state.json" ] && cp "$HOME/.hermes/rooms/keet-state.json" "$HOME/.hermes/rooms/keet-state.json.bak.$TS" || true
+rm -f "$HOME/.hermes/rooms/keet-key-material.json" "$HOME/.hermes/rooms/keet-state.json"
+
+bash <(curl -fsSL https://raw.githubusercontent.com/pepeneif/keet-dropin-module/main/install_keet_dropin.sh) --target hermes
+
+"$HOME/.hermes/node-v20.12.0-<platform>/bin/node" "$HOME/.hermes/skills/keet-create-room/create_room.js" 'Hermes'
+```
 
 ---
 
