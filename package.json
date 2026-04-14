@@ -7,7 +7,15 @@
     "keet-dropin": "./install_keet_dropin.sh"
   },
   "scripts": {
-    "install:keet": "bash ./install_keet_dropin.sh"
+    "install:keet": "bash ./install_keet_dropin.sh",
+    "test:keet:key": "node ./Tests/01_generate_keet_key.js",
+    "test:keet:room": "node ./Tests/02_room_invite_and_chat.js",
+    "test:keet:room:create": "node ./Tests/02_room_invite_and_chat.js --create-only"
+  },
+  "dependencies": {
+    "blind-pairing-core": "^2.10.0",
+    "hypercore-id-encoding": "^1.3.0",
+    "hyperswarm": "^4.17.0"
   },
   "keywords": [
     "keet",

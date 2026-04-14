@@ -313,6 +313,65 @@ Generated runtime assets are written at install time into the detected workspace
 
 ---
 
-## 10) License
+## 10) Human-runnable Keet tests (independent from agent skills)
+
+To debug room/inviteURL behavior outside of runtime adapters (Hermes/NanoBot/CoPaw/OpenClaw), this repository now includes standalone scripts under `Tests/`.
+
+### Install local test dependencies
+
+```bash
+npm install
+```
+
+### Test 1: generate and validate Keet key material
+
+```bash
+npm run test:keet:key
+```
+
+This test validates:
+
+- generation of a 32-byte key
+- `createInvite/decodeInvite` flow (`blind-pairing-core`)
+- `roomId` encoding/decoding (`hypercore-id-encoding`)
+- final `inviteUrl` format: `pear://keet/<roomId>`
+
+You can also pass an existing key:
+
+```bash
+node ./Tests/01_generate_keet_key.js --key <hex-or-base64>
+```
+
+### Test 2: create room + inviteURL + keep room open for chat
+
+Create room and keep it alive:
+
+```bash
+npm run test:keet:room -- --name Host
+```
+
+Create room only (no long-running session):
+
+```bash
+npm run test:keet:room:create
+```
+
+Join an existing room from another terminal/machine:
+
+```bash
+node ./Tests/02_room_invite_and_chat.js --invite pear://keet/<roomId> --name Guest
+```
+
+While the script is running, room presence remains active and participants using the same invite URL can send/receive messages in real time.
+
+### Suggested manual test workflow
+
+1. Terminal A: run `npm run test:keet:room -- --name Host`
+2. Copy the printed `inviteUrl`
+3. Terminal B: run `node ./Tests/02_room_invite_and_chat.js --invite <inviteUrl> --name Guest`
+4. Exchange messages in both terminals
+5. Keep Terminal A open to keep host presence active
+
+## 11) License
 
 MIT for this repository. Upstream dependencies keep their own licenses.
