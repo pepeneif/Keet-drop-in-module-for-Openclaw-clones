@@ -8,6 +8,19 @@ const readline = require('readline')
 const Hyperswarm = require('hyperswarm')
 const { createInvite, decodeInvite } = require('blind-pairing-core')
 const { encode: encodeCoreKey, decode: decodeCoreKey } = require('hypercore-id-encoding')
+const z32 = require('z32')
+
+const DEFAULT_INVITE_PORT = 49737
+const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const DEFAULT_INVITE_NODES = [
+  { host: '1.1.1.1', port: DEFAULT_INVITE_PORT },
+  { host: '8.8.8.8', port: DEFAULT_INVITE_PORT },
+  { host: '9.9.9.9', port: DEFAULT_INVITE_PORT },
+  { host: '8.8.4.4', port: DEFAULT_INVITE_PORT },
+  { host: '208.67.222.222', port: DEFAULT_INVITE_PORT },
+  { host: '208.67.220.220', port: DEFAULT_INVITE_PORT },
+  { host: '94.140.14.14', port: DEFAULT_INVITE_PORT }
+]
 
 function printHelp() {
   console.log(`Keet Test 02 - Create room + inviteURL + interactive keep-alive chat
@@ -32,7 +45,8 @@ Options:
   --help                 Show this help
 
 Notes:
-  - This script validates Keet-style inviteURL generation from discoveryKey.
+  - This script generates canonical Keet inviteURL using blind-pairing payload (z32),
+    with backward-compatible parsing for legacy discovery-key roomIds.
   - It keeps a room topic open while running and allows message exchange with other participants
     running this same script in the same invite URL.
 `)
@@ -99,20 +113,59 @@ function parseInviteUrl(url) {
   const m = String(url || '').trim().match(/^pear:\/\/keet\/([^/\s]+)$/)
   if (!m) throw new Error('Invalid invite URL. Expected pear://keet/<roomId>')
   const roomId = m[1]
-  const discoveryKey = decodeCoreKey(roomId)
-  if (!discoveryKey || discoveryKey.byteLength !== 32) {
+
+  // Legacy mode (discovery key encoded directly as 52-char z32 / 64-char hex)
+  try {
+    const legacyDiscoveryKey = decodeCoreKey(roomId)
+    if (legacyDiscoveryKey && legacyDiscoveryKey.byteLength === 32) {
+      return {
+        roomId,
+        inviteUrl: `pear://keet/${roomId}`,
+        discoveryKey: Buffer.from(legacyDiscoveryKey),
+        inviteFormat: 'legacy-discovery-key',
+        invitePayload: null
+      }
+    }
+  } catch (_) {}
+
+  // Canonical mode (z32-encoded blind-pairing invite payload)
+  let invitePayload
+  try {
+    invitePayload = z32.decode(roomId)
+  } catch (_) {
     throw new Error('Invalid roomId payload in invite URL')
   }
-  return { roomId, inviteUrl: `pear://keet/${roomId}`, discoveryKey: Buffer.from(discoveryKey) }
+
+  let decoded
+  try {
+    decoded = decodeInvite(invitePayload)
+  } catch (_) {
+    throw new Error('Invalid roomId payload in invite URL')
+  }
+
+  if (!decoded.discoveryKey || decoded.discoveryKey.byteLength !== 32) {
+    throw new Error('Invalid roomId payload in invite URL')
+  }
+
+  return {
+    roomId,
+    inviteUrl: `pear://keet/${roomId}`,
+    discoveryKey: Buffer.from(decoded.discoveryKey),
+    inviteFormat: 'canonical-invite',
+    invitePayload
+  }
 }
 
 function createRoomFromKey(keyBuf) {
-  const { invite } = createInvite(keyBuf)
+  const { invite } = createInvite(keyBuf, {
+    expires: Date.now() + DEFAULT_INVITE_TTL_MS,
+    additionalNodes: DEFAULT_INVITE_NODES
+  })
   const decoded = decodeInvite(invite)
   if (!decoded.discoveryKey || decoded.discoveryKey.byteLength !== 32) {
     throw new Error('createInvite/decodeInvite failed: invalid discovery key')
   }
-  const roomId = encodeCoreKey(decoded.discoveryKey)
+  const roomId = z32.encode(invite)
   const inviteUrl = `pear://keet/${roomId}`
 
   const parsed = parseInviteUrl(inviteUrl)
@@ -124,6 +177,8 @@ function createRoomFromKey(keyBuf) {
     roomId,
     inviteUrl,
     discoveryKey: Buffer.from(decoded.discoveryKey),
+    inviteFormat: parsed.inviteFormat,
+    inviteUrlLength: inviteUrl.length,
     ownerKeyHex: keyBuf.toString('hex'),
     ownerKeyBase64: keyBuf.toString('base64')
   }
@@ -318,6 +373,8 @@ async function main() {
     ok: true,
     roomId: room.roomId,
     inviteUrl: room.inviteUrl,
+    inviteFormat: room.inviteFormat || 'legacy-discovery-key',
+    inviteUrlLength: room.inviteUrl.length,
     discoveryKeyHex: room.discoveryKey.toString('hex'),
     ownerKeyHex: room.ownerKeyHex,
     ownerKeyBase64: room.ownerKeyBase64,
